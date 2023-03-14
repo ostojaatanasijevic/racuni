@@ -58,99 +58,119 @@ fn main() {
         }
     }
 
-    //JEDNOG DANA DODATI KONKURENTNO SKIDANJE STRANICA
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
-        .build()
-        .unwrap();
-
     let mut suma_sumarom = 0.0;
-    for link in list_of_links {
-        let response = client.get(&link.0).send().expect("Failed to download");
+    let mut handles = Vec::new();
 
-        let body = response.text();
+    //PARALELIZOVANO, AL VALJA POPRAVITI
+    //RC il slično za real time upise u fajl
+    //ili, bolje još, handling za ctrl+c tako da kulturno quituje
+    let len = list_of_links.len();
+    for (n, link) in list_of_links.into_iter().enumerate() {
+        handles.push(std::thread::spawn(move || {
+            let mut suma_sumarom = 0.0;
+            let client = reqwest::blocking::Client::builder()
+                .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
+                .build()
+                .unwrap();
 
-        let mut html_data = String::new();
-        match body {
-            Ok(body) => html_data = body,
-            Err(e) => eprintln!("{e}"),
-        }
+            let response = client.get(&link.0).send().expect("Failed to download");
 
-        if !html_data.contains("ФИСКАЛНИ РАЧУН") {
-            eprintln!("Ne sadrži fiskalni račun, nešto ne valja");
-        }
+            let body = response.text();
 
-        let artikli_index = html_data
-            .find("Артикли")
-            .expect("Nije pronašao ključnu reč Artikli");
-        let ukupan_iznos_index = html_data
-            .find("Укупан износ:")
-            .expect("Nije pronašao ključnu reč iznos");
+            let mut html_data = String::new();
+            match body {
+                Ok(body) => html_data = body,
+                Err(e) => eprintln!("{e}"),
+            }
 
-        let tty = &html_data[artikli_index..ukupan_iznos_index];
-        let lines = tty.lines().skip(3);
+            if !html_data.contains("ФИСКАЛНИ РАЧУН") {
+                eprintln!("Ne sadrži fiskalni račun, nešto ne valja");
+            }
 
-        /*
-        println!("\nZA SVRHE PROVERE:");
-        for line in lines.clone() {
-            println!("{}", &line);
-        }
-        */
+            let artikli_index = html_data
+                .find("Артикли")
+                .expect("Nije pronašao ključnu reč Artikli");
+            let ukupan_iznos_index = html_data
+                .find("Укупан износ:")
+                .expect("Nije pronašao ključnu reč iznos");
 
-        let datum = html_data
-            .find("ПФР време:")
-            .expect("Nekim čudom ovaj račun nema datum");
-        let datum = html_data[datum..]
-            .lines()
-            .nth(0)
-            .expect("Nekako nema ni jedne linije")
-            .split_once(":")
-            .expect("Nema dvotačke, baš čudno")
-            .1
-            .replace(". ", "--");
+            let tty = &html_data[artikli_index..ukupan_iznos_index];
+            let lines = tty.lines().skip(3);
 
-        let datum = datum.split_whitespace().last().unwrap();
+            /*
+            println!("\nZA SVRHE PROVERE:");
+            for line in lines.clone() {
+                println!("{}", &line);
+            }
+            */
 
-        println!("{datum}");
+            let datum = html_data
+                .find("ПФР време:")
+                .expect("Nekim čudom ovaj račun nema datum");
+            let datum = html_data[datum..]
+                .lines()
+                .nth(0)
+                .expect("Nekako nema ni jedne linije")
+                .split_once(":")
+                .expect("Nema dvotačke, baš čudno")
+                .1
+                .replace(". ", "--");
 
-        let mut ime_artikla: String = String::new();
+            let datum = datum.split_whitespace().last().unwrap();
 
-        //ova for petlja prolazi kroz sve linije fiskalnog računa
-        'lines: for line in lines {
-            let line_nums = line.replace(".", "").replace(",", ".");
-            let brojevi = line_nums.split(" ");
-            let mut cene = Vec::new();
+            println!("{datum}");
 
-            //ova petlja traži tri broja: cena:broj_komada:ukupna_cena
-            for broj in brojevi {
-                let vrednost = broj.parse::<f32>();
-                match vrednost {
-                    Ok(v) => cene.push(v),
-                    Err(_) => (),
+            let mut ime_artikla: String = String::new();
+
+            //ova for petlja prolazi kroz sve linije fiskalnog računa
+            'lines: for line in lines {
+                let line_nums = line.replace(".", "").replace(",", ".");
+                let brojevi = line_nums.split(" ");
+                let mut cene = Vec::new();
+
+                //ova petlja traži tri broja: cena:broj_komada:ukupna_cena
+                for broj in brojevi {
+                    let vrednost = broj.parse::<f32>();
+                    match vrednost {
+                        Ok(v) => cene.push(v),
+                        Err(_) => (),
+                    }
                 }
+
+                if cene.len() != 3 {
+                    //eprintln!("Ovo nije red cena");
+                    ime_artikla.push_str(line);
+                    continue;
+                }
+
+                //poslednja provera da li je u pitanju red cena
+                if (cene[0] * cene[1] - cene[2]).abs() > 0.1 {
+                    //eprintln!("Ovo nije red cena");
+                    ime_artikla.push_str(line);
+                    continue 'lines;
+                }
+
+                println!(
+                    "Kupljeni artikl je {ime_artikla}\nkomada {} po ukupnoj ceni od {}",
+                    cene[1], cene[2]
+                );
+                suma_sumarom += cene[2];
+                ime_artikla = String::new();
             }
 
-            if cene.len() != 3 {
-                //eprintln!("Ovo nije red cena");
-                ime_artikla.push_str(line);
-                continue;
-            }
+            (link.1.clone(), suma_sumarom, n)
+        }));
+    }
 
-            //poslednja provera da li je u pitanju red cena
-            if (cene[0] * cene[1] - cene[2]).abs() > 0.1 {
-                //eprintln!("Ovo nije red cena");
-                ime_artikla.push_str(line);
-                continue 'lines;
-            }
+    let mut to_write = vec![String::new(); len];
+    for handle in handles {
+        let tmp = handle.join().unwrap();
+        to_write[tmp.2] = tmp.0;
+        suma_sumarom += tmp.1;
+    }
 
-            println!(
-                "Kupljeni artikl je {ime_artikla}\nkomada {} po ukupnoj ceni od {}",
-                cene[1], cene[2]
-            );
-            suma_sumarom += cene[2];
-            ime_artikla = String::new();
-        }
-        writeln!(links_file, "{}", link.1).expect("Failed to write???? WTF");
+    for line in to_write {
+        writeln!(links_file, "{}", line).unwrap();
     }
 
     println!("==========================================\nSveukupno u navedenom periodu potrošeno: {}\n==========================================",suma_sumarom);
