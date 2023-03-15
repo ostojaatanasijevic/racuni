@@ -123,7 +123,7 @@ fn main() {
             let mut ime_artikla: String = String::new();
 
             //ova for petlja prolazi kroz sve linije fiskalnog računa
-            'lines: for line in lines {
+            for line in lines {
                 let line_nums = line.replace(".", "").replace(",", ".");
                 let brojevi = line_nums.split(" ");
                 let mut cene = Vec::new();
@@ -147,7 +147,7 @@ fn main() {
                 if (cene[0] * cene[1] - cene[2]).abs() > 0.1 {
                     //eprintln!("Ovo nije red cena");
                     ime_artikla.push_str(line);
-                    continue 'lines;
+                    continue;
                 }
 
                 println!(
