@@ -6,19 +6,92 @@ use urlencoding::decode;
 pub const FILEPATH: &str = "/var/log/nginx/access.log";
 pub const PROCESSED_LINKS_PATH: &str = "links.done";
 
+struct Artikl {
+    ime: String,
+    cena: f32,
+    komada: f32,
+    ukupna_cena: f32,
+}
+
+struct Racun {
+    vreme: String,
+    lista_artikala: Vec<Artikl>,
+}
+
+impl Eq for Racun {}
+impl PartialEq for Racun {
+    fn eq(&self, other: &Self) -> bool {
+        self.vreme == other.vreme
+    }
+}
+
+impl Ord for Racun {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let halfs = self.vreme.split("--");
+        let date = halfs
+            .clone()
+            .nth(0)
+            .unwrap()
+            .split(".")
+            .map(|a| a.parse::<i32>().unwrap())
+            .collect::<Vec<i32>>();
+        let time = halfs
+            .clone()
+            .nth(1)
+            .unwrap()
+            .split(":")
+            .map(|a| a.parse::<i32>().unwrap())
+            .collect::<Vec<i32>>();
+
+        let o_halfs = other.vreme.split("--");
+
+        let o_date = o_halfs
+            .clone()
+            .nth(0)
+            .unwrap()
+            .split(".")
+            .map(|a| a.parse::<i32>().unwrap())
+            .collect::<Vec<i32>>();
+        let o_time = o_halfs
+            .clone()
+            .nth(1)
+            .unwrap()
+            .split(":")
+            .map(|a| a.parse::<i32>().unwrap())
+            .collect::<Vec<i32>>();
+
+        date[2].cmp(&o_date[2]).then_with(|| {
+            date[1].cmp(&o_date[1]).then_with(|| {
+                date[0].cmp(&o_date[0]).then_with(|| {
+                    time[0].cmp(&o_time[0]).then_with(|| {
+                        time[1]
+                            .cmp(&o_time[1])
+                            .then_with(|| time[2].cmp(&o_time[2]))
+                    })
+                })
+            })
+        })
+    }
+}
+impl PartialOrd for Racun {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 fn main() {
     //pročitaj sve već uradjene linkove, ne valja duplirati posao
-    let links_file_result = File::open(PROCESSED_LINKS_PATH);
-    let links_file;
-    let mut links_file_empty = false;
-    match links_file_result {
-        Ok(file) => links_file = file,
+    let (links_file, links_file_empty) = match File::open(PROCESSED_LINKS_PATH) {
+        Ok(file) => (file, false),
         Err(_) => {
             eprintln!("Fajl u kojem se čuvaju prethodni linkovi je ili pomeren ili ne postoji, otvara se novi fajl");
-            links_file = File::create(PROCESSED_LINKS_PATH).expect("Neuspelo kreiranje fajla");
-            links_file_empty = true;
+            (
+                File::create(PROCESSED_LINKS_PATH).expect("Neuspelo kreiranje fajla"),
+                true,
+            )
         }
-    }
+    };
+
     let links_lines_iterator = io::BufReader::new(links_file).lines();
     let mut old_links: Vec<String> = Vec::new();
     if !links_file_empty {
@@ -50,7 +123,7 @@ fn main() {
                 }
             }
 
-            let result = process_line(line.clone());
+            let result = process_access_log_line(line.clone());
             match result {
                 Ok(link) => list_of_links.push((link, line)),
                 Err(_) => writeln!(links_file, "{}", line).expect("Failed to write???? WTF"),
@@ -67,6 +140,10 @@ fn main() {
     let len = list_of_links.len();
     for (n, link) in list_of_links.into_iter().enumerate() {
         handles.push(std::thread::spawn(move || {
+            let mut racun = Racun {
+                vreme: String::new(),
+                lista_artikala: Vec::new(),
+            };
             let mut suma_sumarom = 0.0;
             let client = reqwest::blocking::Client::builder()
                 .user_agent("Mozilla/5.0(X11;Linux x86_64;rv10.0)")
@@ -118,6 +195,7 @@ fn main() {
 
             let datum = datum.split_whitespace().last().unwrap();
 
+            racun.vreme = datum.to_string();
             println!("{datum}");
 
             let mut ime_artikla: String = String::new();
@@ -154,19 +232,29 @@ fn main() {
                     "Kupljeni artikl je {ime_artikla}\nkomada {} po ukupnoj ceni od {}",
                     cene[1], cene[2]
                 );
+
+                racun.lista_artikala.push(Artikl {
+                    ime: ime_artikla,
+                    cena: cene[0],
+                    komada: cene[1],
+                    ukupna_cena: cene[2],
+                });
+
                 suma_sumarom += cene[2];
                 ime_artikla = String::new();
             }
 
-            (link.1.clone(), suma_sumarom, n)
+            (link.1.clone(), suma_sumarom, n, racun)
         }));
     }
 
+    let mut lista_racuna = Vec::new();
     let mut to_write = vec![String::new(); len];
     for handle in handles {
         let tmp = handle.join().unwrap();
         to_write[tmp.2] = tmp.0;
         suma_sumarom += tmp.1;
+        lista_racuna.push(tmp.3)
     }
 
     for line in to_write {
@@ -174,9 +262,30 @@ fn main() {
     }
 
     println!("==========================================\nSveukupno u navedenom periodu potrošeno: {}\n==========================================",suma_sumarom);
+
+    lista_racuna.sort();
+
+    let mut out_file = match OpenOptions::new().write(true).append(true).open("out") {
+        Ok(file) => file,
+        Err(_) => File::create("out").expect("Neuspelo kreiranje fajla"),
+    };
+
+    for racun in lista_racuna {
+        writeln!(out_file, "{}", racun.vreme).unwrap();
+
+        for artikl in racun.lista_artikala.iter() {
+            writeln!(
+                out_file,
+                "Kupljeni artikl je {}\nkomada {} po ukupnoj ceni od {}, {} po komadu",
+                artikl.ime, artikl.komada, artikl.ukupna_cena, artikl.cena
+            )
+            .unwrap();
+        }
+    }
+    writeln!(out_file,"==========================================\nSveukupno u navedenom periodu potrošeno: {}\n==========================================",suma_sumarom).unwrap();
 }
 
-fn process_line(line: String) -> Result<String, String> {
+fn process_access_log_line(line: String) -> Result<String, String> {
     if !line.contains("suf.purs.gov.rs") {
         return Err("Ne sadrži suf.purs.gov.rs".to_string());
     }
