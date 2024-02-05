@@ -64,7 +64,8 @@ fn main() {
     }
 
     let mut suma_sumarom = 0.0;
-    let mut handles = Vec::new();
+    let mut handles: Vec<std::thread::JoinHandle<Result<(String, f32, usize, Racun), &str>>> =
+        Vec::new();
 
     //PARALELIZOVANO, AL VALJA POPRAVITI
     //RC il slično za real time upise u fajl
@@ -92,12 +93,16 @@ fn main() {
                 eprintln!("Ne sadrži fiskalni račun, nešto ne valja");
             }
 
-            let artikli_index = html_data
-                .find("Артикли")
-                .expect("Nije pronašao ključnu reč Artikli");
-            let ukupan_iznos_index = html_data
-                .find("Укупан износ:")
-                .expect("Nije pronašao ključnu reč iznos");
+            let artikli_index_result = html_data.find("Артикли");
+            let artikli_index = match artikli_index_result {
+                Some(a) => a,
+                None => return Err("ERROR: NIje pronadjena ključna reč: Artikli"),
+            };
+
+            let ukupan_iznos_index = match html_data.find("Укупан износ:") {
+                Some(a) => a,
+                None => return Err("ERROR: Nije pronadjena ključna reč: iznos"),
+            };
 
             let tty = &html_data[artikli_index..ukupan_iznos_index];
             let lines = tty.lines().skip(3);
@@ -179,17 +184,22 @@ fn main() {
                 ime_artikla = String::new();
             }
 
-            (link.1.clone(), suma_sumarom, n, racun)
+            Ok((link.1.clone(), suma_sumarom, n, racun))
         }));
     }
 
     let mut lista_racuna = Vec::new();
     let mut to_write = vec![String::new(); len];
     for handle in handles {
-        let tmp = handle.join().unwrap();
-        to_write[tmp.2] = tmp.0;
-        suma_sumarom += tmp.1;
-        lista_racuna.push(tmp.3)
+        let tmp: Result<(String, f32, usize, Racun), _> = handle.join().unwrap();
+        match tmp {
+            Ok(tmp) => {
+                to_write[tmp.2] = tmp.0;
+                suma_sumarom += tmp.1;
+                lista_racuna.push(tmp.3)
+            }
+            Err(e) => eprintln!("{}", &e),
+        }
     }
 
     for line in to_write {
