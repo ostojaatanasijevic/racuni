@@ -7,6 +7,7 @@ use urlencoding::decode;
 
 pub const FILEPATH: &str = "/var/log/nginx/access.log";
 pub const PROCESSED_LINKS_PATH: &str = "links.done";
+pub const FAILED_LINKS_PATH: &str = "links.failed";
 
 fn main() {
     let args = cli::Args::parse();
@@ -18,6 +19,17 @@ fn main() {
             eprintln!("Fajl u kojem se čuvaju prethodni linkovi je ili pomeren ili ne postoji, otvara se novi fajl");
             (
                 File::create(PROCESSED_LINKS_PATH).expect("Neuspelo kreiranje fajla"),
+                true,
+            )
+        }
+    };
+
+    let (failed_links_file, failed_links_file_empty) = match File::open(FAILED_LINKS_PATH) {
+        Ok(file) => (file, false),
+        Err(_) => {
+            eprintln!("Fajl u kojem se čuvaju neuspli linkovi je ili pomeren ili ne postoji, otvara se novi fajl");
+            (
+                File::create(FAILED_LINKS_PATH).expect("Neuspelo kreiranje fajla"),
                 true,
             )
         }
@@ -45,6 +57,8 @@ fn main() {
         .open(PROCESSED_LINKS_PATH)
         .expect("Failed to open");
 
+    //append
+    //processed links to old links file
     //tuple tipa (dekodirani_link, kodirani_link), neophodno za lakšu proveru već obradjenih linija
     let mut list_of_links: Vec<(String, String)> = Vec::new();
     'log_iter: for line in lines_iterator {
@@ -96,12 +110,32 @@ fn main() {
             let artikli_index_result = html_data.find("Артикли");
             let artikli_index = match artikli_index_result {
                 Some(a) => a,
-                None => return Err("ERROR: NIje pronadjena ključna reč: Artikli"),
+
+                None => {
+                    let mut failed_links_file = OpenOptions::new()
+                        .write(true)
+                        .append(true)
+                        .open(FAILED_LINKS_PATH)
+                        .expect("Failed to open");
+
+                    writeln!(failed_links_file, "{}", &link.0).unwrap();
+                    return Err("ERROR: Nije pronadjena ključna reč: Artikli");
+                }
             };
 
             let ukupan_iznos_index = match html_data.find("Укупан износ:") {
                 Some(a) => a,
-                None => return Err("ERROR: Nije pronadjena ključna reč: iznos"),
+                None => {
+                    let mut failed_links_file = OpenOptions::new()
+                        .write(true)
+                        .append(true)
+                        .open(FAILED_LINKS_PATH)
+                        .expect("Failed to open");
+
+                    writeln!(failed_links_file, "{}", &link.0).unwrap();
+
+                    return Err("ERROR: Nije pronadjena ključna reč: Iznos");
+                }
             };
 
             let tty = &html_data[artikli_index..ukupan_iznos_index];
