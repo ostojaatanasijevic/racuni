@@ -3,6 +3,7 @@ use clap::Parser;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::io::{self, BufRead};
+use std::{thread, time};
 use urlencoding::decode;
 
 pub const FILEPATH: &str = "/var/log/nginx/access.log";
@@ -93,7 +94,19 @@ fn main() {
                 .build()
                 .unwrap();
 
-            let response = client.get(&link.0).send().expect("Failed to download");
+            let mut response = client.get(&link.0).send();
+            while true {
+                match response {
+                    Ok(_) => break,
+                    Err(_) => {
+                        let hundred_millis = time::Duration::from_millis(100);
+                        thread::sleep(hundred_millis);
+                        response = client.get(&link.0).send()
+                    }
+                }
+            }
+
+            let response = response.unwrap();
 
             let body = response.text();
 
@@ -433,7 +446,7 @@ fn mesecni_izvestaj(istorija: &Vec<Racun>) {
         }
     }
 
-    for g in 2022..2024 {
+    for g in 2022..2025 {
         for m in 1..13 {
             print_mesec(m, g, &godine);
         }

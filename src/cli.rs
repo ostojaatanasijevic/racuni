@@ -5,6 +5,7 @@ use clap::Parser;
 //QR računi
 pub struct Args {
     #[arg(short, long)]
-    ///Lenght of fft sample size
+    // Poredi potrošnju na mesečnoj bazi
     pub mesecno: bool,
+    pub ukupno: bool,
 }
